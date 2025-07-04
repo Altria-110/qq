@@ -1,0 +1,103 @@
+
+import socket
+import threading
+import json
+
+# 存储用户信息：用户名:密码
+users = {
+    "user1": "pass1",
+    "user2": "pass2"
+}
+
+# 存储在线用户：用户名:客户端连接
+online_users = {}
+
+def handle_client(client_socket, addr):
+    """处理客户端连接"""
+    try:
+        # 接收登录信息
+        login_data = client_socket.recv(1024).decode('utf-8')
+        login_info = json.loads(login_data)
+        
+        username = login_info.get("username")
+        password = login_info.get("password")
+        
+        # 验证用户登录
+        if username in users and users[username] == password:
+            # 登录成功
+            client_socket.send(json.dumps({"status": "success", "message": "登录成功"}).encode('utf-8'))
+            online_users[username] = client_socket
+            print(f"用户 {username} 已登录，地址: {addr}")
+            
+            # 通知其他用户有新用户上线
+            for user, sock in online_users.items():
+                if user != username:
+                    sock.send(json.dumps({"type": "system", "message": f"用户 {username} 上线了"}).encode('utf-8'))
+            
+            # 处理消息接收
+            while True:
+                data = client_socket.recv(1024).decode('utf-8')
+                if not data:
+                    break
+                
+                try:
+                    message = json.loads(data)
+                    if message.get("type") == "logout":
+                        break
+                    
+                    # 转发消息给目标用户
+                    target = message.get("target")
+                    if target in online_users:
+                        online_users[target].send(json.dumps({
+                            "type": "message",
+                            "sender": username,
+                            "message": message.get("content")
+                        }).encode('utf-8'))
+                        print(f"转发消息: {username} -> {target}: {message.get('content')}")
+                    else:
+                        client_socket.send(json.dumps({"type": "system", "message": f"用户 {target} 不在线"}).encode('utf-8'))
+                except json.JSONDecodeError:
+                    print("接收到无效的JSON数据")
+        
+        else:
+            # 登录失败
+            client_socket.send(json.dumps({"status": "failed", "message": "用户名或密码错误"}).encode('utf-8'))
+            print(f"登录失败，地址: {addr}")
+    
+    except Exception as e:
+        print(f"客户端处理异常: {e}")
+    finally:
+        # 客户端断开连接
+        if username in online_users:
+            del online_users[username]
+            client_socket.close()
+            print(f"用户 {username} 已下线")
+            
+            # 通知其他用户
+            for user, sock in online_users.items():
+                sock.send(json.dumps({"type": "system", "message": f"用户 {username} 下线了"}).encode('utf-8'))
+
+def start_server():
+    """启动服务器"""
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_address = ('localhost', 8888)
+    server_socket.bind(server_address)
+    server_socket.listen(5)
+    
+    print(f"服务器已启动，监听地址: {server_address[0]}:{server_address[1]}")
+    
+    try:
+        while True:
+            client_socket, addr = server_socket.accept()
+            print(f"新客户端连接: {addr}")
+            client_thread = threading.Thread(target=handle_client, args=(client_socket, addr))
+            client_thread.daemon = True
+            client_thread.start()
+    except KeyboardInterrupt:
+        print("服务器正在关闭...")
+    finally:
+        server_socket.close()
+
+if __name__ == "__main__":
+    start_server()
