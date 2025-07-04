@@ -1,0 +1,147 @@
+import socket
+import threading
+import json
+import time
+
+class QQClient:
+    def __init__(self, host='localhost', port=8888):
+        """初始化客户端"""
+        self.host = host
+        self.port = port
+        self.client_socket = None
+        self.username = None
+        self.running = False
+    
+    def connect(self):
+        """连接到服务器"""
+        try:
+            self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.client_socket.connect((self.host, self.port))
+            print(f"已连接到服务器 {self.host}:{self.port}")
+            return True
+        except Exception as e:
+            print(f"连接服务器失败: {e}")
+            return False
+    
+    def login(self, username, password):
+        """用户登录"""
+        self.username = username
+        login_data = json.dumps({"username": username, "password": password})
+        self.client_socket.send(login_data.encode('utf-8'))
+        
+        response = self.client_socket.recv(1024).decode('utf-8')
+        result = json.loads(response)
+        
+        if result["status"] == "success":
+            print(result["message"])
+            self.running = True
+            # 启动消息接收线程
+            receive_thread = threading.Thread(target=self.receive_messages)
+            receive_thread.daemon = True
+            receive_thread.start()
+            return True
+        else:
+            print(result["message"])
+            return False
+    
+    def receive_messages(self):
+        """接收服务器消息"""
+        while self.running:
+            try:
+                data = self.client_socket.recv(1024).decode('utf-8')
+                if not data:
+                    break
+                
+                message = json.loads(data)
+                message_type = message.get("type")
+                
+                if message_type == "system":
+                    print(f"\n[系统消息] {message.get('message')}")
+                elif message_type == "message":
+                    sender = message.get("sender")
+                    content = message.get("message")
+                    print(f"\n[{sender}] {content}")
+                
+                self.show_input_prompt()
+            except Exception as e:
+                print(f"接收消息异常: {e}")
+                break
+    
+    def send_message(self, target, content):
+        """发送消息给指定用户"""
+        if not self.running:
+            print("请先登录")
+            return
+        
+        message = json.dumps({
+            "type": "message",
+            "target": target,
+            "content": content
+        })
+        self.client_socket.send(message.encode('utf-8'))
+    
+    def logout(self):
+        """用户登出"""
+        if not self.running:
+            return
+        
+        logout_data = json.dumps({"type": "logout"})
+        self.client_socket.send(logout_data.encode('utf-8'))
+        self.running = False
+        if self.client_socket:
+            self.client_socket.close()
+            self.client_socket = None
+        print("已登出")
+    
+    def show_input_prompt(self):
+        """显示输入提示"""
+        print(f"\n[{self.username}] 请输入消息 (格式: /to 用户名 消息 或 直接输入消息): ", end="")
+    
+    def start(self):
+        """启动客户端"""
+        if not self.connect():
+            return
+        
+        # 登录循环
+        while not self.username:
+            username = input("请输入用户名 (user1 或 user2): ")
+            password = input("请输入密码: ")
+            if self.login(username, password):
+                break
+        
+        # 消息发送循环
+        self.show_input_prompt()
+        while self.running:
+            try:
+                message = input()
+                if not message:
+                    self.show_input_prompt()
+                    continue
+                
+                # 处理私聊命令: /to 用户名 消息
+                if message.startswith("/to "):
+                    parts = message[4:].split(" ", 1)
+                    if len(parts) == 2:
+                        target, content = parts
+                        self.send_message(target, content)
+                    else:
+                        print("格式错误，请使用 /to 用户名 消息")
+                else:
+                    # 这里简化处理，假设直接输入消息是发送给另一个用户
+                    # 实际应用中可以改进为选择聊天对象
+                    target = "user1" if self.username == "user2" else "user2"
+                    self.send_message(target, message)
+                
+                self.show_input_prompt()
+            except KeyboardInterrupt:
+                self.logout()
+                break
+            except Exception as e:
+                print(f"发送消息异常: {e}")
+                self.logout()
+                break
+
+if __name__ == "__main__":
+   client = QQClient()
+    client.start()
+ 
